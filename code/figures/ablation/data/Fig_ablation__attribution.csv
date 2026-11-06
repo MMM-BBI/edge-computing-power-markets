@@ -1,0 +1,6 @@
+,experiment,price,quantity,n_seeds,unit_welfare,unit_welfare_mean,inter_profit_avg
+0,robust,learned,learned,3,158.33 ± 0.63,158.3256736675202,2148.85327862101
+1,x_rulep_learnq,rule,learned,3,138.26 ± 1.86,138.25752168175714,2434.318379745307
+2,x_learnp_ruleq,learned,rule,3,145.74 ± 2.55,145.73879494991155,2470.4415309680885
+3,x_rulep_ruleq,rule,rule,3,130.11 ± 4.12,130.11343120715014,2757.364690477207
+0,main effects,price effect 17.85 ± 3.12,quantity effect 10.37 ± 1.34,3,interaction 4.44 ± 4.69,,

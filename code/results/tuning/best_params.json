@@ -1,0 +1,7 @@
+{
+ "gamma": 0.139,
+ "lr": 0.000471,
+ "entropy_coef": 0.00194,
+ "clip": 0.125,
+ "ppo_epochs": 9
+}

@@ -1,0 +1,1 @@
+{"name": "buyer_exit_50", "spec": {"drop_role": "PureBuyer", "drop_frac": 0.5}, "env_kwargs": {"drop_agents": 450}, "clone": {}}

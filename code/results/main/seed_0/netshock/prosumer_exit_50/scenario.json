@@ -1,0 +1,1 @@
+{"name": "prosumer_exit_50", "spec": {"drop_role": "Prosumer", "drop_frac": 0.5}, "env_kwargs": {"drop_agents": 1050}, "clone": {}}

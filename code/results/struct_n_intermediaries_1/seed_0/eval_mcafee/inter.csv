@@ -1,0 +1,2 @@
+inter,theta,rho,p1_in,p2_out,salvage,profit,throughput,leakage,retail_share,purchase_share,p1_avg_price,p2_avg_price,in_degree
+inter_0,1.0,0.035,16193.947400009425,0.0,16193.947400000012,-157.5608671191704,0.0,0.9999999999994187,0.0,1.0,0.012753029389181094,,4.233406342253119

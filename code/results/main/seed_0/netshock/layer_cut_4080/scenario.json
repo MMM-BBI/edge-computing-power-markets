@@ -1,0 +1,1 @@
+{"name": "layer_cut_4080", "spec": {"blocked_layers": ["RTX4080"]}, "env_kwargs": {"blocked_layers": ["RTX4080"]}, "clone": {}}

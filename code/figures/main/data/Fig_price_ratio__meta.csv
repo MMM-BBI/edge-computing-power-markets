@@ -1,0 +1,2 @@
+experiment,N,train_days,test_days,seeds,gamma,lr,share_trades_at_99pct_of_cap,points_per_card,whiskers,kde_bandwidth
+main,3000,2800,100,0,0.139,0.000471,0.00018212607240758818,250,1.5 IQR,one bin (0.02)

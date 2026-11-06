@@ -1,0 +1,9 @@
+case,method,reference,unit_welfare,unit_welfare_reference,max_rel_diff,identical
+main,marl,main\seed_0\eval_marl,159.0500104629672,159.0500104629672,0.0,True
+flat,marl,sens_tariff_flat\seed_0\eval_marl,162.7826932294813,162.7826932294813,0.0,True
+pv1.5,marl,energy_pv_1.5\seed_0\eval_marl,160.4241224541762,160.4241224541762,0.0,True
+pv2,marl,energy_pv_2\seed_0\eval_marl,162.0436383533114,162.0436383533114,0.0,True
+main,cda,main\seed_0\eval_cda,135.94822960730835,135.94822960730835,0.0,True
+main,sdr,main\seed_0\eval_sdr,67.98946240498721,67.98946240498721,0.0,True
+main,mmr,main\seed_0\eval_mmr,122.1130075958324,122.1130075958324,0.0,True
+main,mcafee,main\seed_0\eval_mcafee,74.19094856742575,74.19094856742575,0.0,True

@@ -1,0 +1,2 @@
+experiment,N,train_days,test_days,seeds,gamma,lr
+main,3000,2800,100,0,0.139,0.000471
