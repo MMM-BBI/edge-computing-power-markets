@@ -1,126 +1,142 @@
-# 中介化算力交易网络 · 完整实验代码
+# Intermediated Computing Power Trading Network: Full Experimental Code
 
-论文的全部实验都从 `run_all.ipynb` 启动：调参、正文主实验与对比、效率上界、消融与归因、多种子、网络实验（网络结构、规模与中介数、网络冲击与恢复）、可利用度、MARL 的敏感性和开销。核心逻辑都在 `cpm/` 下的 py 文件里，notebook 只负责调用。
+All experiments in the paper are launched from `run_all.ipynb`: hyperparameter tuning, the main experiment and benchmark comparison in the main text, the efficiency upper bound, ablations and attribution, multiple seeds, network experiments (network structure, scale and number of intermediaries, network shocks and recovery), exploitability, MARL sensitivity, and computational overhead. The core logic resides in the Python files under `cpm/`; the notebook is responsible only for invoking it.
 
-## 1. 目录结构（整个文件夹放在你新建的目录下）
+## 1. Directory Structure (Place the Entire Folder in a New Directory)
 
-```
+```text
 computing_market_v3/
-├── run_all.ipynb      启动文件：从上到下运行，每个实验一个独立 cell
+├── run_all.ipynb      Launcher: run from top to bottom; one independent cell per experiment
 ├── README.md
 ├── requirements.txt
 └── cpm/
-    ├── config.py      参数总表、统一实验标准、联合调参搜索空间、敏感性/结构实验取值、全部实验清单
-    ├── specs.py       卡型表、显存分档、两条电价曲线、唯一的运行成本函数 c^run
-    ├── data.py        合成数据（画像、逐时需求、逐任务显存分档）
-    ├── mechanism.py   统一价中点出清、McAfee 交易缩减出清
-    ├── env.py         市场环境（三阶段、出价上限、中介规则、规则基准、U^base、W、共同随机数）
-    ├── learner.py     PPO：IPPO（默认）/ MAPPO（集中式 critic）
-    ├── runner.py      训练循环、唯一评估函数 evaluate()
-    ├── collector.py   评估期数据采集与网络度量
-    ├── upper_bound.py 效率上界（LP）
-    ├── experiments.py 作业编排：并行、续跑、结果复用、调参选择、可利用度、开销、局部重做（refresh/reset）
-    ├── network.py     网络实验：网络冲击（节点退出/进入、卡型层切断、规模迁移）与冲击后恢复
-    ├── calibration.py 电价、成本前提、显存自检
-    ├── analysis.py    汇总表、配对检验、收敛诊断、运行核查
-    └── figures.py     全部图
+    ├── config.py      Master parameter registry, unified experimental standard, joint tuning search space, values for sensitivity and structural experiments, and complete experiment manifest
+    ├── specs.py       Card-type table, VRAM tiers, two electricity-tariff curves, and the single operating-cost function c^run
+    ├── data.py        Synthetic data (profiles, hourly demand, per-task VRAM tiers)
+    ├── mechanism.py   Uniform-price midpoint clearing and McAfee trade-reduction clearing
+    ├── env.py         Market environment (three stages, bid caps, intermediary rules, rule-based benchmarks, U^base, W, common random numbers)
+    ├── learner.py     PPO: IPPO (default) / MAPPO (centralized critic)
+    ├── runner.py      Training loop and the single evaluation function evaluate()
+    ├── collector.py   Data collection and network metrics during evaluation
+    ├── upper_bound.py Efficiency upper bound (LP)
+    ├── experiments.py Job orchestration: parallelism, resumption, result reuse, tuning selection, exploitability, overhead, and partial reruns (refresh/reset)
+    ├── network.py     Network experiments: network shocks (node exit/entry, card-type layer removal, scale migration) and post-shock recovery
+    ├── calibration.py Electricity tariffs, cost assumptions, and VRAM self-checks
+    ├── analysis.py    Summary tables, paired tests, convergence diagnostics, and run checks
+    └── figures.py     All figures
 ```
 
-运行后自动生成：
+The following are generated automatically after running:
+
+```text
+data/<data key>/                      Dataset cache (a dataset is generated only once for the same set of data parameters)
+results/tuning/best_params.json       Selected algorithm hyperparameters (automatically read in Stages 2 and 3)
+results/<experiment name>/seed_<s>/   Per-job outputs: train_log.csv, val_log.csv, final.pt,
+                                     train_meta.json, eval_<method>/...
+results/tables/                       All summary tables (CSV); run_check.csv is the run-check table
+figures/<subdirectory>/<figure>.png   1000 dpi PNG (also saved as PDF); subdirectories:
+                                     00_data, main, robust, tuning, ablation,
+                                     efficiency, network, exploit, sens_<parameter>,
+                                     struct_<parameter>, overhead
+figures/<subdirectory>/data/          All values and source information plotted in each figure (CSV),
+                                     read directly when regenerating figures
 ```
-data/<数据键>/               数据集缓存（同一组数据参数只生成一次）
-results/tuning/best_params.json   调参选中的算法超参数（阶段二、三自动读取）
-results/<实验名>/seed_<s>/   每个作业：train_log.csv、val_log.csv、final.pt、train_meta.json、eval_<方法>/…
-results/tables/              全部汇总表（csv），其中 run_check.csv 为运行核查表
-figures/<子目录>/<图名>.png   1000 dpi PNG（另存 PDF）；子目录：00_data、main、robust、tuning、ablation、
-                             efficiency、network、exploit、sens_<参数>、struct_<参数>、overhead
-figures/<子目录>/data/       每张图画出的全部数值与来源信息（csv），重画时直接读取
-```
 
-## 2. 统一标准（控制变量）
+## 2. Unified Standard (Controlled Variables)
 
-- **所有实验同一标准**：N = 3000、训练 2800 天、验证 200 天、测试 100 天；同一数据集；同一评估协议（新建环境、验证集最后 20 天预热、共同随机数）；训练结束的验证评估、可利用度检验也先预热，训练中途的验证直接沿用训练环境中产消者的价格预期。不再使用缩减规模。
-- **正文**：单种子（`MAIN_SEED = 0`）。MARL 与 CDA / SDR / MMR / McAfee 在同一种子、同一数据、同一训练天数下比较；正文所有图都来自这一次运行。
-- **补充材料**：每类实验只改变一个因素，其余与正文完全一致。
+- **All experiments use the same standard**: N = 3000, 2800 training days, 200 validation days, and 100 test days; the same dataset; and the same evaluation protocol (a fresh environment, a 20-day warm-up using the last 20 validation days, and common random numbers). The validation assessment at the end of training and the exploitability checks are also preceded by warm-up, whereas validation during training directly inherits the prosumers' price expectations from the training environment. No reduced-scale experiments are used.
+- **Main text**: A single seed (`MAIN_SEED = 0`). MARL is compared with CDA, SDR, MMR, and McAfee using the same seed, data, and number of training days; all figures in the main text come from this run.
+- **Supplementary information**: Each experiment changes only one factor; all other settings are identical to those in the main text.
 
-| 实验 | 改变的因素 | 种子 |
+| Experiment | Factor Changed | Seeds |
 |---|---|---|
-| 调参（阶段一） | 五个算法超参数的组合：γ、学习率、熵系数、裁剪范围、PPO 轮数 | 搜索种子 0；前 3 名加种子 1、2 复核 |
-| 消融 / 学习类基线 / 2×2 归因 | 一个设计 | 3 个种子（0–2），与完整方法同种子配对 |
-| 多种子 | 只有种子（0–4） | 5 个 |
-| 敏感性（只检验 MARL） | 一个经济/标定/行为参数：α、β、ρ̄、b、ξ（含平坦电价）、η、H、δ、预测噪声、纯买方比例、保留价强度 κ、预期更新速度 λ̄、损失厌恶强度 | 单种子 |
-| 结构实验 | N ∈ {300, 1000, 2000, 5000}，\|M\| ∈ {1, 2, 4, 5, 8} | 单种子 |
-| 网络冲击、冲击后恢复、可利用度 | 以正文策略为基准，只改变网络（节点、连接、规模）或单个主体 | 单种子 |
+| Hyperparameter tuning (Stage 1) | Joint combinations of five algorithm hyperparameters: γ, learning rate, entropy coefficient, clipping range, and PPO epochs | Search seed 0; top three configurations rechecked with seeds 1 and 2 |
+| Ablation / learning-based baselines / 2 × 2 attribution | One design component | Three seeds (0–2), paired with the full method using the same seed |
+| Multiple seeds | Seed only (0–4) | Five |
+| Sensitivity (MARL only) | One economic, calibration, or behavioral parameter: α, β, ρ̄, b, ξ (including the flat tariff), η, H, δ, demand-signal noise, share of pure buyers, reservation-price strength κ, expectation-updating speed λ̄, and loss-aversion strength | Single seed |
+| Structural experiments | N ∈ {300, 1000, 2000, 5000}; \|M\| ∈ {1, 2, 4, 5, 8} | Single seed |
+| Network shocks, post-shock recovery, exploitability | Starting from the main-text policy and changing only the network (nodes, connections, or scale) or a single agent | Single seed |
 
-- **调参规则（联合随机搜索）**：五个参数同时取值，不逐个扫描，避免漏掉参数间的交互。搜索空间见 `config.TUNE_SPACE`：γ ∈ [0, 0.99]，学习率 ∈ [3e-5, 1e-3]（对数均匀），熵系数 ∈ [1e-3, 5e-2]（对数均匀），裁剪 ∈ [0.1, 0.3]，PPO 轮数 ∈ {3,…,10}。用拉丁超立方采样 24 组（采样种子固定为 2026，可复现），另加原默认组合作为第 0 组，共 25 组，都用种子 0 训练。验证福利前 3 名再各用种子 1、2 训练，以 3 个种子的验证均值选定最终组合（防止挑中"运气好的种子"）。选择依据是训练结束后最终策略在全部 200 个验证日上的确定性单位福利；测试集只报告，不参与选择。选中值写入 `results/tuning/best_params.json`，之后所有实验都使用它。
-- **调参的边界**：只调算法超参数。经济与标定参数描述的是市场本身，只做敏感性检验，不按结果"优化"。
-- **训练日程与收敛判定**：2800 个训练日分两段。前 70%（1960 天）是退火期，探索噪声和熵系数线性下降，学习率余弦衰减到 5%；后 30%（840 天）是稳定期，三者都固定在下限继续训练（`explore_lock_frac = 0.30`）。退火期里训练曲线上升有一部分只是探索噪声在减小，不能用来判断收敛。收敛只在稳定期内判定，以确定性验证曲线为主：稳定期后半段相对前半段的变化小于 2%，且线性斜率不显著（p > 0.05）或小于每 100 回合 1%，记为已收敛（见 `convergence_<实验>.csv` 的 `converged` 列）。
-- **产消者保留价（出售意愿）**：出价低于保留价时，产消者宁可把卡留在手里，不卖。保留价分两步：r⁰_i,t = c_i,t + φ_i·max(0, P̂_i,t − c_i,t)，r_i,t = r⁰_i,t + θ_i·max(0, ê_i,t − r⁰_i,t)：
-  - c_i,t：自己的运行成本（电价、功耗、折旧，随时段变化）；
-  - P̂_i,t：对本卡型该时段转售价的适应性预期，初值为 ECC 零售价，此后每天用观察到的二级市场成交价按个体速度 λ_i ~ U(0.5, 1.5)·λ̄（λ̄ = 0.3）指数平滑更新；
-  - φ_i：可接受的最低剩余份额，个体异质，φ_i ~ κ·Beta(1.29, 4.24)（κ = 1），中位数 0.20、均值 0.23。分布由最后通牒博弈的两个实证事实锚定：低于约 20% 的分配约有一半被拒绝；平均分配 40.4% 时平均拒绝率 16.2%（Oosterbeek, Sloof & van de Kuilen 2004 元分析，37 篇论文）。
-  - ê_i,t：对自己卖价的预期，用观察到的一级市场成交价以同一速度 λ_i 平滑；θ_i ~ U(0.25, 0.35)，取自 Genesove & Mayer (2001)：面临名义损失的卖方会把要价提高预期损失的 25–35%，成交概率明显下降（"惜售"）。
-  - 保留价只约束出售决策（卖给中介或卖给 ECC 回购都一样），不进入效用和福利，二者都是货币口径。
-  - 四种规则基准受同一约束：CDA 的卖价下限、McAfee 的如实报价都是保留价；SDR/MMR 的统一价按"在该价格下愿意卖"的供给求不动点。
-  - 奖励基准 U^base 是"没有中介化市场"的反事实：没有二级市场价格可参照，P̂ 停在 ECC 零售价、没有卖价经验，保留价为 c + φ_i(P^ES − c)。它与定价方法、训练进程、动作都无关，所以产消者不卖不会被惩罚（不卖且无需求时奖励恰为 0，已在 α = 0.1 与 0.4 下逐时检验），各方法的福利基准也相同。
-  - 效率上界按首优处理：规划者不受保留价约束，仍有 W* ≥ W（已逐时检验），效率缺口包含惜售带来的损失。
-  - 个体参数 φ_i、θ_i、λ_i 只由数据种子决定，与训练种子无关：多种子实验只改变训练随机性，市场里的人是同一群。
-  - κ = 0 且损失厌恶强度为 0 即旧模型，均作为敏感性的取值点。
-- **统一价规则基准（与文献一致）**：进口价对应 P^ES，出口价对应 P^EB，按卡型分别计算。
-  - SDR 取自 Liu et al.（IEEE TPWRS 2017），没有可调参数：SDR ≥ 1 时买卖价都等于 P^EB；SDR < 1 时 p_s = P^ES·P^EB/((P^ES − P^EB)·SDR + P^EB)，p_b = p_s·SDR + P^ES·(1 − SDR)。
-  - MMR 取自 Long et al.（IEEE PES GM 2017），唯一参数是中间价位置 0.5：p_mid = (P^ES + P^EB)/2；S ≥ D 时买方付 p_mid、卖方得 (D·p_mid + (S − D)·P^EB)/S；S < D 时卖方得 p_mid、买方付 (S·p_mid + (D − S)·P^ES)/D。
-  - 中介是价格跟随者：按 p_s 收购，零售挂牌价 = p_b + 本中介整合成本 o_m，买方接受不高于其出价上限的挂牌价，按挂牌价成交。
-- **二级市场规则对所有方法相同**：买方按偏好把全部可行卡型排序、逐轮尝试（第一偏好卡型没有库存时进入下一轮）。MARL 的买方按学到的偏好排序；规则基准的买方按"挂牌价/报价 × 整单量"由低到高排序；McAfee 按 ECC 成本排序。旧版规则基准的买方只尝试总支出最低的一档，相当于给规则方法换了一个更差的二级市场，比较不公平，已改正。小规模试运行与全规模（N = 3000）规则评估中，CDA 的单位福利因此从约 120 升到约 136，MMR 约 122——MARL（上一轮约 158）仍然最好，但领先幅度是约 16%，不是旧版的 30% 以上，写作时以新结果为准。
-- **SDR/MMR 的需求只计一次**：每个买方的整单需求按其可行卡型的供给占比分摊到各层，单一商品时退化为原文献的 S/D。旧版把一个买方在每个可行层都全额计入（约 90% 的任务在 7 个层都可行），D 被高估数倍、S/D 被系统性压低。改正后 SDR 在 α = 0.1 下明显变弱（全规模约 68）：SDR 公式在 S/D 不很小时卖方价迅速趋近出口价 P^EB = 0.1·P^ES，低于大多数产消者的保留价。这是 SDR 公式在本文标定下的性质，可在讨论中说明。
-- **福利计入运营方盈余**：McAfee 交易缩减的预算盈余（买方付 b_k、卖方收 s_k 的差额）归市场运营方，计入总剩余 W，与 LP 上界同口径（W ≤ W* 已逐时检验）；表中"Operator surplus"单列，可看出 McAfee 的福利中有多少是运营方拿走的。其余方法该项为 0。
-- **规则基准的报童收购量（自适应）**：临界比率 SDR/MMR 直接用本时段规则价，其余规则用跨天保留的成交价平滑；本中介在该卡型上的售出率平滑低于 0.3 时按比例减少收购（下限 0.02）：长期卖不掉就几乎停收，正常经营时不额外折减（库存风险已由报童分位数处理）。旧版每天零点价格清零后取 0.5、且不看自己卖没卖掉，会持续收购卖不出去的算力。
-- **网络冲击的口径**：中介退出后其收购能力随之消失（其余中介份额不重新归一化）；新进入的中介 θ = 1，沿用中等规模中介的策略，收购能力是新增的；散户退出 = 不再有需求也不再提供算力（固定随机排列，10% ⊂ 20% ⊂ 30% ⊂ 50%）。
-- **交易网络指标**（每次评估都输出，`eval_<方法>/network_daily.csv`、`network_degrees.csv`）：每天的一级/二级边数（散户–中介对）、相邻两天边集合的 Jaccard 持续性、活跃卖方/买方比例、卖方与买方的度（每天交易的中介数）、中介入度/出度、卖方与买方成交量的基尼系数与前 10% 份额、日成交量的变异系数。
-- **中介收购量动作**：收购强度 v = (a+1)/2 ∈ [0, 1]，与价格动作的映射一致，初值 0.5。旧设计 v = max(0, a) 在 a < 0 时收购量恒为 0、梯度消失，利润最薄的 3090 层会被永久放弃（没有库存 → 没有成交 → 没有学习信号）；旧设计保留为消融 `abl_relu_qty`。
-- **再学习协议（config.ADAPT）**：可利用度的最优响应重训与冲击后恢复共用同一套设置——在已训练策略上重新打开适度探索（探索倍数 0.2）、学习率取调参值的一半、熵系数取下限；训练环境与验证环境都先预热价格预期。
-- **冲击后恢复的度量**：每个情景第 0 天 = 原策略直接面对冲击后的网络；再学习 300 天后取最后 3 次验证的均值。再适应收益用双重差分 (情景末期 − 情景第 0 天) − (control 末期 − control 第 0 天) 扣除再学习本身带来的变化，`recovered_share` = 再适应收益 / 冲击造成的跌幅。冲击移除的产能不会被补回，所以能恢复的只是"定价再适应"那一部分；小规模试运行中这部分很小（中介退出约收回 5–10% 的跌幅），说明冲击损失主要是结构性的、正文策略对网络变化本身已较稳健。
-- **训练中的网络形成**：训练中途与结束时的确定性验证同时记录交易网络指标（`val_net_*`：一级/二级边数、活跃卖方比例、卖方/买方度、零售流量 HHI），画成 `Fig_network_formation`（多种子为 `FigS_robust_network_formation`），用来描述网络是如何"长出来"的。
-- **可利用度检验**：中介逐家单独偏离；产消者、纯买方各随机抽 5% 组成群体共用一个偏离策略（单个散户在上千人中的学习信号太弱）。偏离者重训 1000 天，每 100 天在验证集上检查一次偏离者的收益，保留最好的一版（含未训练的原策略），所以收益增量 ≥ 0，符合最优响应的定义；验证曲线存于 `exploit/<主体>/br_val_curve.csv`。
-- **结果复用**：参数与种子完全相同的作业会自动复用已有结果。例如正文实验的 MARL 就是调参选中的那一组，多种子实验的种子 0、1、2 就是调参复核中已训练的作业，都不会重复训练。运行核查表的 `reused_from` 列会注明来源。
+- **Tuning approach (joint random search)**: The five parameters are sampled jointly rather than scanned one at a time, avoiding missed interactions between parameters. The search space is specified by `config.TUNE_SPACE`: γ ∈ [0, 0.99], learning rate ∈ [3e-5, 1e-3] (log-uniform), entropy coefficient ∈ [1e-3, 5e-2] (log-uniform), clipping range ∈ [0.1, 0.3], and PPO epochs ∈ {3, …, 10}. We draw 24 configurations by Latin hypercube sampling using a fixed sampling seed of 2026 for reproducibility, and add the original default configuration as configuration 0, giving 25 configurations in total; all are trained with seed 0. The top three configurations by validation welfare are then retrained with seeds 1 and 2, and the final configuration is selected by the mean validation welfare across the three seeds, preventing selection of a configuration that merely happened to be paired with a lucky seed. Selection is based on deterministic welfare per unit of computing power over all 200 validation days after training; the test set is used only for reporting and never for selection. The selected values are written to `results/tuning/best_params.json`, after which all experiments use them.
+- **Scope of tuning**: Only algorithm hyperparameters are tuned. Economic and calibration parameters describe the market itself; they are used only for sensitivity checks and are not "optimized" based on the results.
+- **Training schedule and convergence criterion**: The 2800 training days are divided into two phases. The first 70% (1960 days) is the annealing phase, during which exploration noise and the entropy coefficient decrease linearly and the learning rate decays according to a cosine schedule to 5%. The remaining 30% (840 days) is the stabilization phase, during which all three are fixed at their lower bounds and training continues (`explore_lock_frac = 0.30`). Part of the rise in the training curve during annealing is merely due to decreasing exploration noise and cannot be used to determine convergence. Convergence is determined only within the stabilization phase, primarily from the deterministic validation curve: convergence is recorded when the relative change in the second half of the stabilization phase versus the first half is less than 2%, and the linear slope is either insignificant (p > 0.05) or less than 1% per 100 episodes. See the `converged` column in `convergence_<experiment>.csv`.
+- **Prosumer reservation prices (willingness to sell)**: When a bid is below the reservation price, the prosumer prefers to keep the cards rather than sell them. The reservation price is constructed in two steps:  
+  r⁰_{i,t} = c_{i,t} + φ_i · max(0, P̂_{i,t} − c_{i,t}),  
+  r_{i,t} = r⁰_{i,t} + θ_i · max(0, ê_{i,t} − r⁰_{i,t}):
+  - c_{i,t}: the prosumer's own operating cost (electricity price, power consumption, and depreciation, varying by time period);
+  - P̂_{i,t}: the adaptive expectation of the resale price for the same card type in that period. It is initialized at the ECC retail price and subsequently updated daily by exponential smoothing of observed secondary-market transaction prices at an individual speed λ_i ~ U(0.5, 1.5) · λ̄ (λ̄ = 0.3);
+  - φ_i: the minimum acceptable surplus share. It is heterogeneous across individuals, with φ_i ~ κ · Beta(1.29, 4.24) (κ = 1), a median of 0.20, and a mean of 0.23. This distribution is anchored in two empirical findings from ultimatum games: allocations below approximately 20% are rejected about half of the time, and when the average allocation is 40.4%, the average rejection rate is 16.2% (meta-analysis by Oosterbeek, Sloof, and van de Kuilen, 2004; 37 papers).
+  - ê_{i,t}: the prosumer's expectation of its own selling price, smoothed using observed primary-market transaction prices at the same updating speed λ_i; θ_i ~ U(0.25, 0.35), based on Genesove and Mayer (2001): sellers facing nominal losses raise their asking prices by 25–35% of the expected loss, and the probability of sale declines markedly ("strategic withholding").
+  - Reservation prices constrain the selling decision only (the same applies to selling to an intermediary or to the ECC buy-back). They do not enter utility or welfare; both are monetary measures.
+  - The four rule-based benchmarks are subject to the same constraint: the CDA seller floor and McAfee truthful quotes are reservation prices. For SDR/MMR, the uniform price is obtained by solving a fixed point using the supply willing to sell at that price.
+  - The reward baseline U^base is the counterfactual of "no intermediated market": no secondary-market price is available for reference, P̂ remains at the ECC retail price, and there is no selling-price experience, so the reservation price is c + φ_i(P^ES − c). This baseline is independent of the pricing method, training process, and actions. A prosumer therefore incurs no penalty for not selling; if it neither sells nor has demand, the reward is exactly zero (verified hour by hour for α = 0.1 and α = 0.4). The welfare baseline is also the same across methods.
+  - The efficiency upper bound is first-best: the planner is not constrained by reservation prices, and W* ≥ W holds (verified hour by hour). The efficiency gap therefore includes losses caused by strategic withholding.
+  - The individual parameters φ_i, θ_i, and λ_i are determined only by the data seed and are independent of the training seed. Multi-seed experiments change only training randomness; the market participants are the same.
+  - κ = 0 with zero loss-aversion strength corresponds to the old model; both configurations are included as sensitivity settings.
+- **Uniform-price rule-based benchmarks (consistent with the literature)**: The import price corresponds to P^ES, and the export price corresponds to P^EB; values are computed separately for each card type.
+  - SDR follows Liu et al. (IEEE TPWRS 2017) and has no tunable parameters. When SDR ≥ 1, both the buying and selling prices equal P^EB. When SDR < 1:  
+    p_s = P^ES · P^EB / ((P^ES − P^EB) · SDR + P^EB),  
+    p_b = p_s · SDR + P^ES · (1 − SDR).
+  - MMR follows Long et al. (IEEE PES GM 2017); its only parameter is the midpoint location, fixed at 0.5:  
+    p_mid = (P^ES + P^EB) / 2.  
+    When S ≥ D, buyers pay p_mid and sellers receive (D · p_mid + (S − D) · P^EB) / S. When S < D, sellers receive p_mid and buyers pay (S · p_mid + (D − S) · P^ES) / D.
+  - Intermediaries are price takers: they purchase at p_s and set their retail listing price to p_b plus their own integration cost o_m. A buyer accepts a listing price no higher than its bid cap and trades at that listing price.
+- **The secondary-market rules are identical across methods**: Buyers rank all feasible card types by preference and try them round by round; if the first-preferred card type is out of stock, they proceed to the next round. MARL buyers rank card types by their learned preferences; rule-based buyers sort by "(listing price / quote) × whole-order quantity" from lowest to highest; McAfee ranks by ECC cost. In the previous version, rule-based buyers tried only the tier with the lowest total expenditure, effectively giving the rule-based methods a worse secondary market and making the comparison unfair. This has been corrected. In both small-scale trials and full-scale evaluations with N = 3000, the welfare per unit for CDA therefore increased from about 120 to about 136, and that for MMR reached about 122. MARL (about 158 in the previous round) remains the best, but its lead is now about 16%, rather than more than 30% as in the old version. The new results should be used when writing.
+- **Demand in SDR/MMR is counted only once**: Each buyer's whole-order demand is apportioned across its feasible card types according to their supply shares. In the single-commodity case, this reduces to the original S/D specification. The old version counted the buyer's full demand in every feasible layer (about 90% of tasks were feasible in all seven layers), overestimating D severalfold and systematically depressing S/D. After the correction, SDR performs substantially worse at α = 0.1 (about 68 at full scale): when S/D is not close to zero, the SDR formula rapidly pushes the seller price toward the export price P^EB = 0.1 · P^ES, which is below the reservation prices of most prosumers. This is a property of the SDR formula under the calibration used here and can be explained in the discussion.
+- **Welfare includes operator surplus**: The budget surplus from McAfee trade reduction (the difference between the price paid by the buyer b_k and the amount received by the seller s_k) accrues to the market operator and is included in total surplus W, consistent with the LP upper bound (W ≤ W* was verified hour by hour). The table reports "Operator surplus" separately, making it possible to see how much of McAfee's welfare is captured by the operator. This term is zero under the other methods.
+- **Adaptive newsvendor acquisition quantities for rule-based benchmarks**: The critical ratios for SDR/MMR directly use the current rule-based price for the period, whereas the other rules use transaction prices smoothed and retained across days. When an intermediary's smoothed sell-through rate for a card type falls below 0.3, its acquisition quantity is reduced proportionally, with a floor of 0.02: if the intermediary cannot sell the card type over the long run, it nearly stops purchasing it; under normal operations, no additional reduction is applied because inventory risk is already handled by the newsvendor quantile. In the old version, the price was reset to 0.5 at midnight every day and the intermediary did not observe its own sell-through, so it kept purchasing computing power that could not be sold.
+- **Definition of network shocks**: After an intermediary exits, its acquisition capacity disappears, and the shares of the remaining intermediaries are not renormalized. A newly entering intermediary has θ = 1, uses the policy of a medium-scale intermediary, and adds new acquisition capacity. A retail participant exits by ceasing to generate demand and ceasing to provide computing capacity (using a fixed random ordering, with 10% ⊂ 20% ⊂ 30% ⊂ 50%).
+- **Trading-network metrics** (reported in every evaluation under `eval_<method>/network_daily.csv` and `network_degrees.csv`): daily primary- and secondary-market edge counts (retail participant–intermediary pairs), Jaccard persistence between the edge sets of adjacent days, active seller and buyer shares, seller and buyer degree (number of intermediaries traded with per day), intermediary in-degree and out-degree, Gini coefficients and top-10% shares for seller and buyer transaction volumes, and the coefficient of variation of daily transaction volume.
+- **Intermediary acquisition-quantity action**: Acquisition intensity is v = (a + 1) / 2 ∈ [0, 1], consistent with the mapping used for price actions, and has an initial value of 0.5. The old design used v = max(0, a), which made the acquisition quantity identically zero whenever a < 0 and caused vanishing gradients; the thinnest-margin 3090 tier could then be permanently abandoned (no inventory → no transaction → no learning signal). The old design is retained as the ablation `abl_relu_qty`.
+- **Relearning protocol (`config.ADAPT`)**: Best-response retraining for exploitability tests and post-shock recovery use the same settings: starting from the trained policy, moderate exploration is re-enabled (exploration multiplier 0.2), the learning rate is set to half the tuned value, the entropy coefficient is set to its lower bound, and both the training and validation environments are warmed up for price expectations.
+- **Post-shock recovery metrics**: Day 0 of each scenario corresponds to the original policy directly facing the post-shock network. After 300 days of relearning, the average of the last three validation assessments is used. Re-adaptation gain is computed by difference-in-differences:  
+  (scenario endpoint − scenario day 0) − (control endpoint − control day 0),  
+  which removes changes caused by relearning itself. Then,  
+  `recovered_share` = re-adaptation gain / shock-induced decline.  
+  Capacity removed by the shock is not restored, so only the "pricing re-adaptation" component can be recovered. In small-scale trials this component is small (intermediary exit recovers only about 5–10% of the decline), indicating that the losses from shocks are primarily structural and that the main-text policy is already relatively robust to changes in the network itself.
+- **Network formation during training**: Trading-network metrics are recorded during deterministic validation both in the middle of training and at the end (`val_net_*`: primary/secondary edge counts, active seller share, seller/buyer degree, and retail-flow HHI) and plotted as `Fig_network_formation` (`FigS_robust_network_formation` for multiple seeds), describing how the trading network "grows."
+- **Exploitability test**: Each intermediary deviates individually. For prosumers and pure buyers, 5% of each group are randomly sampled to form a group that shares one deviation policy (the learning signal for a single retail participant would be too weak among more than one thousand participants). The deviating agents are retrained for 1000 days, and the deviator payoff is checked on the validation set every 100 days. The best version, including the original untrained policy, is retained, so the payoff increment is ≥ 0, as required by the definition of a best response. The validation curve is stored in `exploit/<agent type>/br_val_curve.csv`.
+- **Result reuse**: Jobs with exactly the same parameters and seed automatically reuse existing results. For example, the MARL experiment in the main text is the configuration selected during tuning, and seeds 0, 1, and 2 of the multi-seed experiments are the jobs already trained during tuning verification; neither is retrained. The `reused_from` column in the run-check table identifies the source.
 
-## 3. 怎么运行
+## 3. How to Run
 
-1. `pip install -r requirements.txt`（有 NVIDIA 显卡时，按 PyTorch 官网命令安装 CUDA 版）。
-2. 在本文件夹下用 Jupyter 打开 `run_all.ipynb`（工作目录必须是本文件夹）。
-3. 先保持 `SMOKE = True` 从上到下运行一遍（几分钟），确认每个 cell 都能产出数据和图。冒烟结果写在 `results_smoke/`、`figures_smoke/`。
-4. 改为 `SMOKE = False`，从上到下运行。阶段一的两个调参 cell（搜索 → 复核）必须先跑完，阶段二、三才能开始；顺序不对时会报错提示。
-5. 中断后重跑同一个 cell 即可续跑：已完成的作业自动跳过；已有作业的参数与当前不一致时会报错，不会混用新旧结果。
-6. 最后一个 cell 只读结果、重画全部图表，任何时候都可以单独运行。
+1. Run `pip install -r requirements.txt`. If an NVIDIA GPU is available, install the CUDA version of PyTorch using the command on the official PyTorch website.
+2. From inside this folder, open `run_all.ipynb` in Jupyter. The working directory must be this folder.
+3. First keep `SMOKE = True` and run from top to bottom once (a few minutes) to confirm that every cell produces data and figures. Smoke-test outputs are written to `results_smoke/` and `figures_smoke/`.
+4. Set `SMOKE = False` and run from top to bottom. The two tuning cells in Stage 1 (search followed by verification) must finish before Stages 2 and 3 can begin. If they are run out of order, the code reports an error.
+5. To resume after an interruption, rerun the same cell: completed jobs are skipped automatically. If the parameters of an existing job differ from the current parameters, the code reports an error instead of mixing old and new results.
+6. The final cell only reads results and regenerates all figures and tables, so it can be run independently at any time.
 
-**并行**：务必保证 `WORKERS × THREADS ≤ 物理核数`，超额订阅会让速度下降数倍。24 核建议 `WORKERS = 3–6`、`THREADS = 4`。
+**Parallelism**: Ensure that `WORKERS × THREADS ≤ the number of physical cores`; oversubscription can slow execution by several times. For a 24-core machine, the recommended settings are `WORKERS = 3–6` and `THREADS = 4`.
 
-**计算量**（按上一轮实测，N = 3000、2800 天，单作业约 28 分钟，3 个并行）：
-- 训练作业共约 106 个：调参 31（搜索 25 + 复核 6；正文与多种子的种子 0–2 复用其结果）、多种子 2（种子 3、4）、消融 15、归因 9、MARL 敏感性 40、结构实验 9（N = 5000 较慢）；3 个并行约 30–35 小时；
-- 只评估、不训练：网络冲击 24 个情景（含 4 个规模迁移）× 5 种方法，约 2–3 小时；
-- 再学习：冲击后恢复 6 × 300 天、可利用度 5 × 1000 天，合计约 2–3 小时；
-- 合计约 35–40 小时。另需约 20 GB 磁盘：改变 ξ、b、纯买方比例、N 时都要生成新数据集。
+**Computational cost** (based on measurements from the previous round, with N = 3000, 2800 days, approximately 28 minutes per job, and three jobs running in parallel):
 
-## 4. 产出 → 论文位置
+- There are approximately 106 training jobs: 31 for tuning (25 search runs + 6 verification runs; the seed 0–2 jobs for the main text and multi-seed experiments reuse their results), 2 additional multi-seed jobs (seeds 3 and 4), 15 ablation jobs, 9 attribution jobs, 40 MARL sensitivity jobs, and 9 structural jobs (N = 5000 is slower). With three jobs running in parallel, this takes approximately 30–35 hours.
+- Evaluation only, without training: 24 network-shock scenarios (including 4 scale-migration scenarios) × 5 methods, approximately 2–3 hours.
+- Relearning: post-shock recovery uses 6 × 300 days, and exploitability uses 5 × 1000 days, for approximately 2–3 hours in total.
+- Total: approximately 35–40 hours. Approximately 20 GB of disk space is also required: new datasets must be generated whenever ξ, b, the share of pure buyers, or N changes.
 
-| 产出 | 用途 |
+## 4. Outputs and Their Locations in the Paper
+
+| Output | Purpose |
 |---|---|
-| `tables/table_methods_main.csv`、`figures/main/Fig_methods` | 正文方法对比（Table 3；逐日配对 Wilcoxon 检验作为补充） |
-| `figures/main/Fig_network_formation` | 训练中交易网络的形成（边数、活跃卖方、零售集中度） |
-| `tables/table_network_main.csv`、`table_intermediaries_main_marl.csv` | 网络度量、中介表 |
-| `figures/main/Fig_training`、`tables/convergence_main.csv` | 收敛曲线（训练 + 确定性验证，灰色阴影为稳定期）与稳定期收敛判定 |
-| `figures/main/Fig_flow_network` | 桑基流量图 |
-| `figures/main/Fig_hourly_spread` | 逐时价差（分时 vs 平坦电价）与成交量 |
-| `figures/main/Fig_price_ratio` | 成交价 / ECC 零售价、成交价 / 买方出价上限 |
-| `figures/main/Fig_substitution` | 层间替代网络（行内占比） |
-| `figures/main/Fig_bidirectional`、`Fig_surplus` | 双向节点、剩余分布 |
-| `tables/table_efficiency_main.csv`、`figures/efficiency/` | 效率比 |
-| `tables/table_ablation.csv`、`table_attribution.csv`、`figures/ablation/` | 消融与 2×2 归因 |
-| `tables/table_tuning.csv`、`figures/tuning/FigS_tuning` | 联合调参：各参数与验证福利的散点、前 3 名多种子复核（补充材料） |
-| `tables/table_methods_robust.csv`、`figures/robust/` | 多种子稳健性（主结论用种子层面配对：MARL − 基准的均值±标准差、MARL 更优的种子数） |
-| `tables/table_sens_<参数>.csv`、`figures/sens_<参数>/` | 敏感性 |
-| `tables/table_sens_n_consumers.csv`、`table_sens_n_intermediaries.csv`、`figures/struct_*` | 结构实验 |
-| `tables/table_network_main.csv`、`figures/main/Fig_network_structure` | 交易网络结构：边数、度、关系持续性、集中度、日成交量波动 |
-| `tables/table_netshock.csv`、`figures/network/` | 网络冲击：中介退出/进入、产消者/买方退出、卡型层关键性、规模迁移 |
-| `tables/table_recovery.csv`、`recovery_curves.csv`、`figures/network/Fig_recovery` | 冲击后恢复轨迹与再适应收益（双重差分） |
-| `tables/table_exploitability.csv`、`overhead.csv` | 可利用度、开销 |
-| `tables/calibration_*.csv`、`figures/00_data/` | 标定自检、电价与需求、显存分布 |
+| `tables/table_methods_main.csv`, `figures/main/Fig_methods` | Main-text method comparison (Table 3; daily paired Wilcoxon tests are provided as supplementary information) |
+| `figures/main/Fig_network_formation` | Formation of the trading network during training (edge count, active sellers, and retail concentration) |
+| `tables/table_network_main.csv`, `table_intermediaries_main_marl.csv` | Network metrics and intermediary table |
+| `figures/main/Fig_training`, `tables/convergence_main.csv` | Convergence curves (training and deterministic validation; gray shading denotes the stabilization phase) and convergence determination for the stabilization phase |
+| `figures/main/Fig_flow_network` | Sankey flow diagram |
+| `figures/main/Fig_hourly_spread` | Hourly price spreads (TOU versus flat tariff) and transaction volume |
+| `figures/main/Fig_price_ratio` | Transaction price / ECC retail price and transaction price / buyer bid cap |
+| `figures/main/Fig_substitution` | Inter-tier substitution network (row percentages) |
+| `figures/main/Fig_bidirectional`, `Fig_surplus` | Bidirectional nodes and surplus distribution |
+| `tables/table_efficiency_main.csv`, `figures/efficiency/` | Efficiency ratios |
+| `tables/table_ablation.csv`, `table_attribution.csv`, `figures/ablation/` | Ablations and 2 × 2 attribution |
+| `tables/table_tuning.csv`, `figures/tuning/FigS_tuning` | Joint tuning: scatter plots of each parameter against validation welfare and multi-seed verification of the top three configurations (supplementary information) |
+| `tables/table_methods_robust.csv`, `figures/robust/` | Multi-seed robustness (main conclusions use seed-level paired comparisons: mean ± standard deviation of MARL minus each benchmark, and the number of seeds in which MARL performs better) |
+| `tables/table_sens_<parameter>.csv`, `figures/sens_<parameter>/` | Sensitivity analyses |
+| `tables/table_sens_n_consumers.csv`, `table_sens_n_intermediaries.csv`, `figures/struct_*` | Structural experiments |
+| `tables/table_network_main.csv`, `figures/main/Fig_network_structure` | Trading-network structure: edge count, degree, relationship persistence, concentration, and daily transaction-volume volatility |
+| `tables/table_netshock.csv`, `figures/network/` | Network shocks: intermediary exit/entry, prosumer/buyer exit, card-type layer criticality, and scale migration |
+| `tables/table_recovery.csv`, `recovery_curves.csv`, `figures/network/Fig_recovery` | Post-shock recovery trajectories and re-adaptation gains (difference-in-differences) |
+| `tables/table_exploitability.csv`, `overhead.csv` | Exploitability and computational overhead |
+| `tables/calibration_*.csv`, `figures/00_data/` | Calibration self-checks, electricity prices and demand, and VRAM distribution |
